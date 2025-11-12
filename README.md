@@ -45,4 +45,3 @@ Configure as variáveis de ambiente ou edite `application.properties`:
 mvn spring-boot:run
 ```
 
-# finnza-backend

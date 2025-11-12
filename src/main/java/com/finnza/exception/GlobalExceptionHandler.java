@@ -65,11 +65,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
+        // Log do erro para debug
+        ex.printStackTrace();
+        
         ErrorResponse error = ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())
                 .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
                 .error("Internal Server Error")
-                .message("Erro interno do servidor")
+                .message(ex.getMessage() != null ? ex.getMessage() : "Erro interno do servidor")
                 .path("/api")
                 .build();
 

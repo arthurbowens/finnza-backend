@@ -65,6 +65,42 @@ public class UsuarioService {
     }
 
     /**
+     * Cria o primeiro usuário admin (sem autenticação)
+     * Só funciona se não houver usuários no sistema
+     */
+    public UsuarioDTO criarPrimeiroAdmin(CriarUsuarioRequest request) {
+        // Verificar se já existe algum usuário
+        long totalUsuarios = usuarioRepository.count();
+        if (totalUsuarios > 0) {
+            throw new RuntimeException("Já existem usuários no sistema. Use o endpoint de criação normal com autenticação.");
+        }
+
+        if (usuarioRepository.existsByEmail(request.getEmail())) {
+            throw new RuntimeException("Email já está em uso");
+        }
+
+        // Criar usuário com role ADMIN forçado
+        Usuario usuario = Usuario.builder()
+                .nome(request.getNome())
+                .email(request.getEmail())
+                .senha(passwordEncoder.encode(request.getSenha()))
+                .role(Usuario.Role.ADMIN) // Sempre ADMIN para o primeiro usuário
+                .status(Usuario.StatusUsuario.ATIVO)
+                .build();
+
+        // Salvar usuário primeiro para ter ID
+        usuario = usuarioRepository.save(usuario);
+
+        // Criar permissões padrão baseadas no role
+        criarPermissoesPadrao(usuario);
+
+        // Salvar novamente com permissões
+        usuario = usuarioRepository.save(usuario);
+
+        return UsuarioDTO.fromEntity(usuario);
+    }
+
+    /**
      * Busca usuário por ID
      */
     @Transactional(readOnly = true)

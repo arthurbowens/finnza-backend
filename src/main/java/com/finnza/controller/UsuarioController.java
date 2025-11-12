@@ -30,6 +30,16 @@ public class UsuarioController {
     private UsuarioService usuarioService;
 
     /**
+     * Cria o primeiro usuário admin (público, sem autenticação)
+     * Só funciona se não houver usuários no sistema
+     */
+    @PostMapping("/primeiro-admin")
+    public ResponseEntity<UsuarioDTO> criarPrimeiroAdmin(@Valid @RequestBody CriarUsuarioRequest request) {
+        UsuarioDTO usuario = usuarioService.criarPrimeiroAdmin(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(usuario);
+    }
+
+    /**
      * Cria um novo usuário
      */
     @PostMapping
