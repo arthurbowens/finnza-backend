@@ -84,6 +84,7 @@ public class SecurityConfig {
         ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setExposedHeaders(Arrays.asList("*")); // Expor todos os headers na resposta
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
