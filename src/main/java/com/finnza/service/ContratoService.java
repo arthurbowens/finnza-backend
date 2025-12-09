@@ -504,30 +504,54 @@ public class ContratoService {
         }
 
         int contratosImportados = 0;
+        int assinaturasProcessadas = 0;
+        int cobrancasProcessadas = 0;
+        int erros = 0;
 
         try {
+            log.info("=== INICIANDO IMPORTAÇÃO DE CONTRATOS DO ASAAS ===");
+            
             // Buscar assinaturas do Asaas
             java.util.List<Map<String, Object>> assinaturas = asaasService.listarAssinaturas();
             log.info("Encontradas {} assinaturas no Asaas para importar", assinaturas.size());
 
             for (Map<String, Object> assinatura : assinaturas) {
+                assinaturasProcessadas++;
                 try {
                     String subscriptionId = (String) assinatura.get("id");
                     String customerId = (String) assinatura.get("customer");
                     
+                    log.debug("Processando assinatura {}: subscriptionId={}, customerId={}", 
+                            assinaturasProcessadas, subscriptionId, customerId);
+                    
+                    if (subscriptionId == null || subscriptionId.isEmpty()) {
+                        log.warn("Assinatura sem ID, pulando...");
+                        continue;
+                    }
+                    
+                    if (customerId == null || customerId.isEmpty()) {
+                        log.warn("Assinatura {} sem customerId, pulando...", subscriptionId);
+                        continue;
+                    }
+                    
                     // Verificar se já existe contrato com essa assinatura
                     Optional<Contrato> contratoExistente = contratoRepository.findByAsaasSubscriptionId(subscriptionId);
                     if (contratoExistente.isPresent()) {
-                        log.debug("Contrato já existe para subscriptionId: {}", subscriptionId);
+                        log.debug("Contrato já existe para subscriptionId: {} (ID: {})", 
+                                subscriptionId, contratoExistente.get().getId());
                         continue;
                     }
 
                     // Buscar cliente no Asaas
+                    log.debug("Buscando cliente no Asaas: {}", customerId);
                     Map<String, Object> clienteAsaas = asaasService.buscarClientePorId(customerId);
-                    if (clienteAsaas.isEmpty()) {
+                    if (clienteAsaas == null || clienteAsaas.isEmpty()) {
                         log.warn("Cliente não encontrado no Asaas: {}", customerId);
+                        erros++;
                         continue;
                     }
+                    
+                    log.debug("Cliente encontrado no Asaas: {}", clienteAsaas.get("name"));
 
                     // Buscar ou criar cliente no banco
                     String cpfCnpj = (String) clienteAsaas.get("cpfCnpj");
@@ -582,24 +606,45 @@ public class ContratoService {
                     contrato = contratoRepository.save(contrato);
                     contratosImportados++;
 
-                    log.info("Contrato importado: {} - SubscriptionId: {}", contrato.getId(), subscriptionId);
+                    log.info("✓ Contrato importado com sucesso: ID={}, SubscriptionId={}, Cliente={}", 
+                            contrato.getId(), subscriptionId, cliente.getRazaoSocial());
                 } catch (Exception e) {
-                    log.error("Erro ao importar assinatura: {}", assinatura.get("id"), e);
+                    erros++;
+                    log.error("✗ Erro ao importar assinatura {}: {}", assinatura.get("id"), e.getMessage(), e);
                 }
             }
+            
+            log.info("Assinaturas processadas: {} importadas, {} erros, {} já existiam", 
+                    contratosImportados, erros, assinaturasProcessadas - contratosImportados - erros);
 
             // Buscar cobranças únicas (payments) do Asaas
             java.util.List<Map<String, Object>> cobrancas = asaasService.listarCobrancas();
             log.info("Encontradas {} cobranças no Asaas para importar", cobrancas.size());
 
             for (Map<String, Object> cobrancaAsaas : cobrancas) {
+                cobrancasProcessadas++;
                 try {
                     String paymentId = (String) cobrancaAsaas.get("id");
                     String customerId = (String) cobrancaAsaas.get("customer");
                     
+                    log.debug("Processando cobrança {}: paymentId={}, customerId={}", 
+                            cobrancasProcessadas, paymentId, customerId);
+                    
+                    if (paymentId == null || paymentId.isEmpty()) {
+                        log.warn("Cobrança sem ID, pulando...");
+                        continue;
+                    }
+                    
+                    if (customerId == null || customerId.isEmpty()) {
+                        log.warn("Cobrança {} sem customerId, pulando...", paymentId);
+                        continue;
+                    }
+                    
                     // Verificar se já existe cobrança com esse paymentId
                     Optional<Cobranca> cobrancaExistente = cobrancaRepository.findByAsaasPaymentId(paymentId);
                     if (cobrancaExistente.isPresent()) {
+                        log.debug("Cobrança já existe para paymentId: {} (ID: {})", 
+                                paymentId, cobrancaExistente.get().getId());
                         continue;
                     }
 
@@ -671,13 +716,20 @@ public class ContratoService {
                     cobrancaRepository.save(cobranca);
                     contratosImportados++;
 
-                    log.info("Cobrança única importada: {} - PaymentId: {}", cobranca.getId(), paymentId);
+                    log.info("✓ Cobrança única importada com sucesso: ID={}, PaymentId={}, Cliente={}", 
+                            cobranca.getId(), paymentId, cliente.getRazaoSocial());
                 } catch (Exception e) {
-                    log.error("Erro ao importar cobrança: {}", cobrancaAsaas.get("id"), e);
+                    erros++;
+                    log.error("✗ Erro ao importar cobrança {}: {}", cobrancaAsaas.get("id"), e.getMessage(), e);
                 }
             }
 
-            log.info("Importação concluída. {} contratos importados do Asaas", contratosImportados);
+            log.info("=== IMPORTAÇÃO CONCLUÍDA ===");
+            log.info("Total de contratos importados: {}", contratosImportados);
+            log.info("Assinaturas processadas: {}", assinaturasProcessadas);
+            log.info("Cobranças processadas: {}", cobrancasProcessadas);
+            log.info("Erros encontrados: {}", erros);
+            
             return contratosImportados;
         } catch (Exception e) {
             log.error("Erro ao importar contratos do Asaas", e);

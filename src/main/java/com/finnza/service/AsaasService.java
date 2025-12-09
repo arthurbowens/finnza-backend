@@ -319,7 +319,7 @@ public class AsaasService {
     }
 
     /**
-     * Lista assinaturas do Asaas
+     * Lista assinaturas do Asaas (com suporte a paginação)
      */
     @SuppressWarnings("unchecked")
     public java.util.List<Map<String, Object>> listarAssinaturas() {
@@ -327,29 +327,57 @@ public class AsaasService {
             return new java.util.ArrayList<>();
         }
 
-        try {
-            Map<String, Object> response = webClient.get()
-                    .uri("/subscriptions")
-                    .header("access_token", apiKey)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block();
+        java.util.List<Map<String, Object>> todasAssinaturas = new java.util.ArrayList<>();
+        final int limit = 100; // Máximo por página da API do Asaas
+        int currentOffset = 0;
+        boolean temMais = true;
 
-            java.util.List<Map<String, Object>> data = (java.util.List<Map<String, Object>>) response.get("data");
-            if (data == null) {
-                return new java.util.ArrayList<>();
+        try {
+            while (temMais) {
+                final int offset = currentOffset;
+                Map<String, Object> response = webClient.get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/subscriptions")
+                                .queryParam("offset", offset)
+                                .queryParam("limit", limit)
+                                .build())
+                        .header("access_token", apiKey)
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block();
+
+                if (response == null) {
+                    break;
+                }
+
+                java.util.List<Map<String, Object>> data = (java.util.List<Map<String, Object>>) response.get("data");
+                if (data == null || data.isEmpty()) {
+                    temMais = false;
+                } else {
+                    todasAssinaturas.addAll(data);
+                    log.info("Buscando assinaturas: offset={}, encontradas={}, total acumulado={}", 
+                            offset, data.size(), todasAssinaturas.size());
+                    
+                    // Verifica se há mais páginas
+                    Boolean hasMore = (Boolean) response.get("hasMore");
+                    if (hasMore == null || !hasMore) {
+                        temMais = false;
+                    } else {
+                        currentOffset += limit;
+                    }
+                }
             }
             
-            log.info("Encontradas {} assinaturas no Asaas", data.size());
-            return data;
+            log.info("Total de assinaturas encontradas no Asaas: {}", todasAssinaturas.size());
+            return todasAssinaturas;
         } catch (Exception e) {
             log.error("Erro ao listar assinaturas do Asaas", e);
-            return new java.util.ArrayList<>();
+            return todasAssinaturas; // Retorna o que conseguiu buscar até o erro
         }
     }
 
     /**
-     * Lista cobranças do Asaas
+     * Lista cobranças do Asaas (com suporte a paginação)
      */
     @SuppressWarnings("unchecked")
     public java.util.List<Map<String, Object>> listarCobrancas() {
@@ -357,24 +385,52 @@ public class AsaasService {
             return new java.util.ArrayList<>();
         }
 
-        try {
-            Map<String, Object> response = webClient.get()
-                    .uri("/payments")
-                    .header("access_token", apiKey)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block();
+        java.util.List<Map<String, Object>> todasCobrancas = new java.util.ArrayList<>();
+        final int limit = 100; // Máximo por página da API do Asaas
+        int currentOffset = 0;
+        boolean temMais = true;
 
-            java.util.List<Map<String, Object>> data = (java.util.List<Map<String, Object>>) response.get("data");
-            if (data == null) {
-                return new java.util.ArrayList<>();
+        try {
+            while (temMais) {
+                final int offset = currentOffset;
+                Map<String, Object> response = webClient.get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/payments")
+                                .queryParam("offset", offset)
+                                .queryParam("limit", limit)
+                                .build())
+                        .header("access_token", apiKey)
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block();
+
+                if (response == null) {
+                    break;
+                }
+
+                java.util.List<Map<String, Object>> data = (java.util.List<Map<String, Object>>) response.get("data");
+                if (data == null || data.isEmpty()) {
+                    temMais = false;
+                } else {
+                    todasCobrancas.addAll(data);
+                    log.info("Buscando cobranças: offset={}, encontradas={}, total acumulado={}", 
+                            offset, data.size(), todasCobrancas.size());
+                    
+                    // Verifica se há mais páginas
+                    Boolean hasMore = (Boolean) response.get("hasMore");
+                    if (hasMore == null || !hasMore) {
+                        temMais = false;
+                    } else {
+                        currentOffset += limit;
+                    }
+                }
             }
             
-            log.info("Encontradas {} cobranças no Asaas", data.size());
-            return data;
+            log.info("Total de cobranças encontradas no Asaas: {}", todasCobrancas.size());
+            return todasCobrancas;
         } catch (Exception e) {
             log.error("Erro ao listar cobranças do Asaas", e);
-            return new java.util.ArrayList<>();
+            return todasCobrancas; // Retorna o que conseguiu buscar até o erro
         }
     }
 
