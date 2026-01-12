@@ -336,6 +336,18 @@ public class OmieService {
 
     /**
      * Lista contas a pagar do OMIE
+     * Documentação: https://app.omie.com.br/api/v1/financas/contapagar/
+     * Método: ListarContasPagar
+     * 
+     * Parâmetros do lcpListarRequest:
+     * - pagina: Número da página (obrigatório)
+     * - registros_por_pagina: Quantidade de registros por página (obrigatório, máximo 500)
+     * - apenas_importado_api: Filtrar apenas registros importados via API ("S" ou "N")
+     * - filtrar_por_data_de: Data inicial no formato DD/MM/YYYY (opcional)
+     * - filtrar_por_data_ate: Data final no formato DD/MM/YYYY (opcional)
+     * - filtrar_por_status: Filtrar por status (opcional)
+     * - ordenar_por: Campo para ordenação (opcional)
+     * - ordem_decrescente: Ordenação decrescente ("S" ou "N") (opcional)
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> listarContasPagar(String dataInicio, String dataFim, 
@@ -345,53 +357,86 @@ public class OmieService {
         }
 
         try {
-            // OMIE ListarContasPagar aceita: pagina, registros_por_pagina (não nPagina/nRegPorPagina!)
+            // Conforme documentação oficial do Omie: https://app.omie.com.br/api/v1/financas/contapagar/
             Map<String, Object> params = new HashMap<>();
+            
+            // Parâmetros obrigatórios
             params.put("pagina", pagina != null ? pagina : 1);
             params.put("registros_por_pagina", registrosPorPagina != null ? Math.min(registrosPorPagina, 500) : 50);
             params.put("apenas_importado_api", "N"); // Exibir todos os registros
             
-            // Adicionar filtros de data se fornecidos (formato DD/MM/YYYY para OMIE)
-            if (dataInicio != null) {
-                // Converter de YYYY-MM-DD para DD/MM/YYYY
-                String[] partes = dataInicio.split("-");
-                if (partes.length == 3) {
-                    params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
+            // Filtros de data (formato DD/MM/YYYY conforme documentação Omie)
+            if (dataInicio != null && !dataInicio.isEmpty()) {
+                try {
+                    // Converter de YYYY-MM-DD para DD/MM/YYYY
+                    String[] partes = dataInicio.split("-");
+                    if (partes.length == 3) {
+                        params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                    }
+                } catch (Exception e) {
+                    log.warn("Erro ao converter dataInicio para formato Omie: {}", dataInicio, e);
                 }
             }
-            if (dataFim != null) {
-                // Converter de YYYY-MM-DD para DD/MM/YYYY
-                String[] partes = dataFim.split("-");
-                if (partes.length == 3) {
-                    params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
+            
+            if (dataFim != null && !dataFim.isEmpty()) {
+                try {
+                    // Converter de YYYY-MM-DD para DD/MM/YYYY
+                    String[] partes = dataFim.split("-");
+                    if (partes.length == 3) {
+                        params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                    }
+                } catch (Exception e) {
+                    log.warn("Erro ao converter dataFim para formato Omie: {}", dataFim, e);
                 }
             }
             
             log.info("Listando contas a pagar do OMIE: pagina={}, registros_por_pagina={}, dataInicio={}, dataFim={}",
                     params.get("pagina"), params.get("registros_por_pagina"), dataInicio, dataFim);
+            log.debug("Parâmetros enviados para Omie: {}", params);
 
             Map<String, Object> response = executarChamadaApi("/financas/contapagar/", "ListarContasPagar", params);
             
-            // OMIE retorna: { "total_de_registros": X, "registros": [...] }
-            List<Map<String, Object>> registros = (List<Map<String, Object>>) response.getOrDefault("conta_pagar_cadastro", new ArrayList<>());
+            log.debug("Resposta completa do Omie: {}", response);
             
-            // Se não encontrar em conta_pagar_cadastro, tenta registros
+            // OMIE retorna a resposta no formato:
+            // {
+            //   "pagina": 1,
+            //   "total_de_paginas": X,
+            //   "registros": [...],
+            //   "conta_pagar_cadastro": [...] (alternativo)
+            // }
+            List<Map<String, Object>> registros = new ArrayList<>();
+            
+            // Primeiro tenta conta_pagar_cadastro (formato mais comum)
+            Object contaPagarCadastro = response.get("conta_pagar_cadastro");
+            if (contaPagarCadastro instanceof List) {
+                registros = (List<Map<String, Object>>) contaPagarCadastro;
+                log.debug("Registros encontrados em 'conta_pagar_cadastro': {}", registros.size());
+            }
+            
+            // Se não encontrou, tenta registros
             if (registros.isEmpty()) {
                 Object registrosObj = response.get("registros");
                 if (registrosObj instanceof List) {
                     registros = (List<Map<String, Object>>) registrosObj;
+                    log.debug("Registros encontrados em 'registros': {}", registros.size());
                 }
             }
             
-            // OMIE retorna total_de_registros e registros na resposta
+            // Obtém total de registros e páginas
             Integer totalRegistros = (Integer) response.getOrDefault("total_de_registros", registros.size());
+            Integer totalPaginas = (Integer) response.getOrDefault("total_de_paginas", 1);
+            Integer paginaAtual = (Integer) response.getOrDefault("pagina", pagina != null ? pagina : 1);
             
             Map<String, Object> resultado = new HashMap<>();
             resultado.put("tipo", "CONTA_PAGAR");
             resultado.put("total_de_registros", totalRegistros);
+            resultado.put("total_de_paginas", totalPaginas);
+            resultado.put("pagina", paginaAtual);
             resultado.put("registros", registros);
             
-            log.info("Contas a pagar retornadas: {} registros (total: {})", registros.size(), totalRegistros);
+            log.info("Contas a pagar retornadas: {} registros (total: {}, página: {}/{})", 
+                    registros.size(), totalRegistros, paginaAtual, totalPaginas);
             return resultado;
         } catch (Exception e) {
             log.error("Erro ao listar contas a pagar do OMIE", e);
@@ -401,6 +446,18 @@ public class OmieService {
 
     /**
      * Lista contas a receber do OMIE
+     * Documentação: https://app.omie.com.br/api/v1/financas/contareceber/
+     * Método: ListarContasReceber
+     * 
+     * Parâmetros do lcrListarRequest:
+     * - pagina: Número da página (obrigatório)
+     * - registros_por_pagina: Quantidade de registros por página (obrigatório, máximo 500)
+     * - apenas_importado_api: Filtrar apenas registros importados via API ("S" ou "N")
+     * - filtrar_por_data_de: Data inicial no formato DD/MM/YYYY (opcional)
+     * - filtrar_por_data_ate: Data final no formato DD/MM/YYYY (opcional)
+     * - filtrar_por_status: Filtrar por status (opcional)
+     * - ordenar_por: Campo para ordenação (opcional)
+     * - ordem_decrescente: Ordenação decrescente ("S" ou "N") (opcional)
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> listarContasReceber(String dataInicio, String dataFim, 
@@ -410,55 +467,86 @@ public class OmieService {
         }
 
         try {
-            // OMIE ListarContasReceber aceita: pagina, registros_por_pagina
+            // Conforme documentação oficial do Omie: https://app.omie.com.br/api/v1/financas/contareceber/
             Map<String, Object> params = new HashMap<>();
+            
+            // Parâmetros obrigatórios
             params.put("pagina", pagina != null ? pagina : 1);
             params.put("registros_por_pagina", registrosPorPagina != null ? Math.min(registrosPorPagina, 500) : 50);
             params.put("apenas_importado_api", "N"); // Exibir todos os registros
             
-            // Adicionar filtros de data se fornecidos (formato DD/MM/YYYY para OMIE)
-            if (dataInicio != null) {
-                // Converter de YYYY-MM-DD para DD/MM/YYYY
-                String[] partes = dataInicio.split("-");
-                if (partes.length == 3) {
-                    params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
+            // Filtros de data (formato DD/MM/YYYY conforme documentação Omie)
+            if (dataInicio != null && !dataInicio.isEmpty()) {
+                try {
+                    // Converter de YYYY-MM-DD para DD/MM/YYYY
+                    String[] partes = dataInicio.split("-");
+                    if (partes.length == 3) {
+                        params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                    }
+                } catch (Exception e) {
+                    log.warn("Erro ao converter dataInicio para formato Omie: {}", dataInicio, e);
                 }
             }
-            if (dataFim != null) {
-                // Converter de YYYY-MM-DD para DD/MM/YYYY
-                String[] partes = dataFim.split("-");
-                if (partes.length == 3) {
-                    params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
+            
+            if (dataFim != null && !dataFim.isEmpty()) {
+                try {
+                    // Converter de YYYY-MM-DD para DD/MM/YYYY
+                    String[] partes = dataFim.split("-");
+                    if (partes.length == 3) {
+                        params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                    }
+                } catch (Exception e) {
+                    log.warn("Erro ao converter dataFim para formato Omie: {}", dataFim, e);
                 }
             }
             
             log.info("Listando contas a receber do OMIE: pagina={}, registros_por_pagina={}, dataInicio={}, dataFim={}",
                     params.get("pagina"), params.get("registros_por_pagina"), dataInicio, dataFim);
+            log.debug("Parâmetros enviados para Omie: {}", params);
 
             Map<String, Object> response = executarChamadaApi("/financas/contareceber/", "ListarContasReceber", params);
             
-            // OMIE retorna: { "total_de_registros": X, "registros": [...] }
-            // Verificar tanto conta_receber_cadastro quanto registros
+            log.debug("Resposta completa do Omie: {}", response);
+            
+            // OMIE retorna a resposta no formato:
+            // {
+            //   "pagina": 1,
+            //   "total_de_paginas": X,
+            //   "registros": [...],
+            //   "conta_receber_cadastro": [...] (alternativo)
+            // }
             List<Map<String, Object>> registros = new ArrayList<>();
+            
+            // Primeiro tenta conta_receber_cadastro (formato mais comum)
             Object contaReceberCadastro = response.get("conta_receber_cadastro");
             if (contaReceberCadastro instanceof List) {
                 registros = (List<Map<String, Object>>) contaReceberCadastro;
-            } else {
+                log.debug("Registros encontrados em 'conta_receber_cadastro': {}", registros.size());
+            }
+            
+            // Se não encontrou, tenta registros
+            if (registros.isEmpty()) {
                 Object registrosObj = response.get("registros");
                 if (registrosObj instanceof List) {
                     registros = (List<Map<String, Object>>) registrosObj;
+                    log.debug("Registros encontrados em 'registros': {}", registros.size());
                 }
             }
             
-            // OMIE retorna total_de_registros na resposta
+            // Obtém total de registros e páginas
             Integer totalRegistros = (Integer) response.getOrDefault("total_de_registros", registros.size());
+            Integer totalPaginas = (Integer) response.getOrDefault("total_de_paginas", 1);
+            Integer paginaAtual = (Integer) response.getOrDefault("pagina", pagina != null ? pagina : 1);
             
             Map<String, Object> resultado = new HashMap<>();
             resultado.put("tipo", "CONTA_RECEBER");
             resultado.put("total_de_registros", totalRegistros);
+            resultado.put("total_de_paginas", totalPaginas);
+            resultado.put("pagina", paginaAtual);
             resultado.put("registros", registros);
             
-            log.info("Contas a receber retornadas: {} registros (total: {})", registros.size(), totalRegistros);
+            log.info("Contas a receber retornadas: {} registros (total: {}, página: {}/{})", 
+                    registros.size(), totalRegistros, paginaAtual, totalPaginas);
             return resultado;
         } catch (Exception e) {
             log.error("Erro ao listar contas a receber do OMIE", e);
@@ -838,26 +926,39 @@ public class OmieService {
 
     /**
      * Cria dados mock para contas a pagar ou receber
+     * Formato conforme resposta real do Omie
      */
     private Map<String, Object> criarMovimentacoesMock(boolean isPagar, String dataInicio, String dataFim) {
         List<Map<String, Object>> registros = new ArrayList<>();
         
-        registros.add(Map.of(
-                "codigo_lancamento", "1",
-                "codigo_cliente_fornecedor", "1",
-                "nome_cliente_fornecedor", "Cliente/Fornecedor Mock",
-                "data_vencimento", dataInicio != null ? dataInicio : "2025-01-15",
-                "valor_documento", 1000.00,
-                "status", isPagar ? "A PAGAR" : "A RECEBER",
-                "observacao", "Movimentação mock"
-        ));
+        // Cria alguns registros mock para simular dados reais
+        for (int i = 1; i <= 5; i++) {
+            Map<String, Object> registro = new HashMap<>();
+            registro.put("codigo_lancamento_omie", i);
+            registro.put("codigo_lancamento_integracao", "MOCK-" + i);
+            registro.put("codigo_cliente_fornecedor", i);
+            registro.put("nome_cliente_fornecedor", isPagar ? "Fornecedor Mock " + i : "Cliente Mock " + i);
+            registro.put("data_vencimento", dataInicio != null ? dataInicio : "15/01/2025");
+            registro.put("data_emissao", dataInicio != null ? dataInicio : "01/01/2025");
+            registro.put("valor_documento", 1000.00 * i);
+            registro.put("valor_pago", i % 2 == 0 ? 1000.00 * i : 0.0);
+            registro.put("data_pagamento", i % 2 == 0 ? (dataInicio != null ? dataInicio : "15/01/2025") : null);
+            registro.put("status", i % 2 == 0 ? (isPagar ? "PAGO" : "RECEBIDO") : (isPagar ? "A PAGAR" : "A RECEBER"));
+            registro.put("observacao", "Movimentação mock " + i);
+            registro.put("codigo_categoria", "1.01.0" + i);
+            registro.put("descricao_categoria", "Categoria Mock " + i);
+            registros.add(registro);
+        }
 
-        return Map.of(
-                "tipo", isPagar ? "CONTA_PAGAR" : "CONTA_RECEBER",
-                "total_de_registros", 1,
-                "registros", registros,
-                "mock", true
-        );
+        Map<String, Object> resultado = new HashMap<>();
+        resultado.put("tipo", isPagar ? "CONTA_PAGAR" : "CONTA_RECEBER");
+        resultado.put("total_de_registros", 5);
+        resultado.put("total_de_paginas", 1);
+        resultado.put("pagina", 1);
+        resultado.put("registros", registros);
+        resultado.put("mock", true);
+        
+        return resultado;
     }
 
     /**
@@ -871,15 +972,16 @@ public class OmieService {
         todas.addAll((List<Map<String, Object>>) pagar.get("registros"));
         todas.addAll((List<Map<String, Object>>) receber.get("registros"));
 
-        return Map.of(
-                "movimentacoes", todas,
-                "total", 2,
-                "total_contas_pagar", 1,
-                "total_contas_receber", 1,
-                "dataInicio", dataInicio != null ? dataInicio : "",
-                "dataFim", dataFim != null ? dataFim : "",
-                "mock", true
-        );
+        Map<String, Object> resultado = new HashMap<>();
+        resultado.put("movimentacoes", todas);
+        resultado.put("total", todas.size());
+        resultado.put("total_contas_pagar", pagar.get("total_de_registros"));
+        resultado.put("total_contas_receber", receber.get("total_de_registros"));
+        resultado.put("dataInicio", dataInicio != null ? dataInicio : "");
+        resultado.put("dataFim", dataFim != null ? dataFim : "");
+        resultado.put("mock", true);
+        
+        return resultado;
     }
 
     public String getAppKey() {
