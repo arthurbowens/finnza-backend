@@ -11,8 +11,10 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -423,6 +425,9 @@ public class OmieService {
                 }
             }
             
+            // Enriquece registros com nomes de clientes/fornecedores
+            enriquecerComNomesClientes(registros);
+            
             // Obtém total de registros e páginas
             Integer totalRegistros = (Integer) response.getOrDefault("total_de_registros", registros.size());
             Integer totalPaginas = (Integer) response.getOrDefault("total_de_paginas", 1);
@@ -533,6 +538,9 @@ public class OmieService {
                 }
             }
             
+            // Enriquece registros com nomes de clientes/fornecedores
+            enriquecerComNomesClientes(registros);
+            
             // Obtém total de registros e páginas
             Integer totalRegistros = (Integer) response.getOrDefault("total_de_registros", registros.size());
             Integer totalPaginas = (Integer) response.getOrDefault("total_de_paginas", 1);
@@ -555,8 +563,9 @@ public class OmieService {
     }
 
     /**
-     * Pesquisa movimentações financeiras do OMIE (combina contas a pagar e receber)
-     * OMIE usa JSON com estrutura específica
+     * Pesquisa movimentações financeiras do OMIE usando o endpoint de Movimentos Financeiros
+     * Documentação: https://app.omie.com.br/api/v1/financas/mf/
+     * Usa o método ListarMovimentos que retorna Contas a Pagar, Contas a Receber e Lançamentos do Conta Corrente
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> pesquisarMovimentacoes(
@@ -574,214 +583,318 @@ public class OmieService {
         }
 
         try {
-            log.info("Pesquisando movimentações financeiras do OMIE: dataInicio={}, dataFim={}, pagina={}, registrosPorPagina={}, tipo={}, categoria={}, textoPesquisa={}",
+            log.info("Pesquisando movimentações financeiras do OMIE (endpoint MF): dataInicio={}, dataFim={}, pagina={}, registrosPorPagina={}, tipo={}, categoria={}, textoPesquisa={}",
                     dataInicio, dataFim, pagina, registrosPorPagina, tipo, categoria, textoPesquisa);
 
-            // Busca contas a pagar e receber em paralelo (página atual)
-            Map<String, Object> contasPagar = listarContasPagar(dataInicio, dataFim, pagina, registrosPorPagina);
-            Map<String, Object> contasReceber = listarContasReceber(dataInicio, dataFim, pagina, registrosPorPagina);
-
-            // Combina os resultados da página atual
-            List<Map<String, Object>> todasMovimentacoes = new ArrayList<>();
+            // Constrói parâmetros para ListarMovimentos conforme documentação
+            // O mfListarRequest aceita apenas nPagina e nRegPorPagina diretamente
+            // Os filtros serão aplicados no backend após receber os dados
+            Map<String, Object> params = new HashMap<>();
             
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> registrosPagar = (List<Map<String, Object>>) contasPagar.get("registros");
-            if (registrosPagar != null) {
-                for (Map<String, Object> registro : registrosPagar) {
-                    registro.put("tipo", "DESPESA");
-                    registro.put("debito", true);
-                    todasMovimentacoes.add(registro);
-                }
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> registrosReceber = (List<Map<String, Object>>) contasReceber.get("registros");
-            if (registrosReceber != null) {
-                for (Map<String, Object> registro : registrosReceber) {
-                    registro.put("tipo", "RECEITA");
-                    registro.put("debito", false);
-                    todasMovimentacoes.add(registro);
-                }
-            }
-
-            int totalPagar = (Integer) contasPagar.getOrDefault("total_de_registros", 0);
-            int totalReceber = (Integer) contasReceber.getOrDefault("total_de_registros", 0);
-            int totalGeral = totalPagar + totalReceber;
-
-            // Aplica filtros nas movimentações (se houver)
-            boolean temFiltros = (tipo != null && !tipo.isEmpty()) || 
-                                (categoria != null && !categoria.isEmpty()) || 
-                                (textoPesquisa != null && !textoPesquisa.trim().isEmpty());
+            // Parâmetros obrigatórios de paginação (únicos suportados diretamente)
+            params.put("nPagina", pagina != null ? pagina : 1);
+            params.put("nRegPorPagina", registrosPorPagina != null ? Math.min(registrosPorPagina, 500) : 50);
             
-            List<Map<String, Object>> movimentacoesFiltradas = todasMovimentacoes;
-            if (temFiltros) {
-                movimentacoesFiltradas = aplicarFiltros(todasMovimentacoes, tipo, categoria, textoPesquisa);
-                log.info("Filtros aplicados: tipo={}, categoria={}, textoPesquisa={}. Resultado: {} de {} movimentações",
-                        tipo, categoria, textoPesquisa, movimentacoesFiltradas.size(), todasMovimentacoes.size());
+            // Nota: Filtros de data, natureza e categoria serão aplicados no backend
+            // após receber os dados, pois o endpoint MF não suporta esses filtros diretamente
+            
+            log.debug("Parâmetros enviados para Omie ListarMovimentos: {}", params);
+            
+            // Chama o endpoint de Movimentos Financeiros
+            Map<String, Object> response = executarChamadaApi("/financas/mf/", "ListarMovimentos", params);
+            
+            log.debug("Resposta completa do Omie (MF): {}", response);
+            
+            // Processa a resposta conforme documentação mfListarResponse
+            List<Map<String, Object>> movimentos = new ArrayList<>();
+            Object movimentosObj = response.get("movimentos");
+            if (movimentosObj instanceof List) {
+                movimentos = (List<Map<String, Object>>) movimentosObj;
             }
-
-            // Calcula totais de receitas e despesas de TODAS as movimentações (não apenas da página atual)
-            // Usa cache para evitar recalcular quando apenas a página muda
+            
+            // Extrai informações de paginação
+            Integer nPagina = (Integer) response.getOrDefault("nPagina", pagina != null ? pagina : 1);
+            Integer nTotPaginas = (Integer) response.getOrDefault("nTotPaginas", 1);
+            Integer nRegistros = (Integer) response.getOrDefault("nRegistros", movimentos.size());
+            Integer nTotRegistros = (Integer) response.getOrDefault("nTotRegistros", movimentos.size());
+            
+            log.info("Movimentações retornadas do OMIE (MF): {} registros (total: {}, página: {}/{})", 
+                    nRegistros, nTotRegistros, nPagina, nTotPaginas);
+            
+            // Normaliza movimentos para o formato esperado pelo frontend
+            List<Map<String, Object>> movimentacoesNormalizadas = new ArrayList<>();
             double totalReceitas = 0.0;
             double totalDespesas = 0.0;
             
-            // Gera chave do cache baseada no período
-            String cacheKey = (dataInicio != null ? dataInicio : "") + "_" + (dataFim != null ? dataFim : "");
-            TotaisCache cache = cacheTotais.get(cacheKey);
-            
-            // TTL do cache: 5 minutos (300000 ms) - suficiente para navegação entre páginas
-            long cacheTtl = 5 * 60 * 1000;
-            
-            // Verifica se existe no cache e não está expirado
-            if (cache != null && !cache.isExpired(cacheTtl)) {
-                totalReceitas = cache.totalReceitas;
-                totalDespesas = cache.totalDespesas;
-                log.debug("Totais obtidos do cache para período {} a {}", dataInicio, dataFim);
-            } else {
-                // Cache não existe ou expirou - calcula os totais
-                try {
-                    log.info("Calculando totais para período {} a {} (cache miss ou expirado)", dataInicio, dataFim);
-                    
-                    // Calcula totais de despesas (contas a pagar) - itera pelas páginas
-                    int paginaPagar = 1;
-                    int registrosPorPaginaPagar = 500; // Limite máximo do OMIE
-                    boolean temMaisPagar = true;
-                    
-                    while (temMaisPagar) {
-                        Map<String, Object> contasPagarPage = listarContasPagar(dataInicio, dataFim, paginaPagar, registrosPorPaginaPagar);
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> registrosPagarPage = (List<Map<String, Object>>) contasPagarPage.get("registros");
-                        
-                        if (registrosPagarPage != null && !registrosPagarPage.isEmpty()) {
-                            for (Map<String, Object> registro : registrosPagarPage) {
-                                Object valorObj = registro.get("nValorTitulo") != null ? registro.get("nValorTitulo") : 
-                                                 registro.get("valor_documento") != null ? registro.get("valor_documento") :
-                                                 registro.get("valor_pago");
-                                if (valorObj != null) {
-                                    double valor = valorObj instanceof Number ? 
-                                            ((Number) valorObj).doubleValue() : 
-                                            Double.parseDouble(valorObj.toString());
-                                    totalDespesas += valor;
-                                }
-                            }
-                            // Verifica se há mais páginas
-                            int totalRegistrosPagar = (Integer) contasPagarPage.getOrDefault("total_de_registros", 0);
-                            temMaisPagar = (paginaPagar * registrosPorPaginaPagar) < totalRegistrosPagar;
-                            paginaPagar++;
-                        } else {
-                            temMaisPagar = false;
-                        }
+            for (Map<String, Object> movimento : movimentos) {
+                Map<String, Object> detalhesMov = (Map<String, Object>) movimento.get("detalhes");
+                Map<String, Object> resumoMov = (Map<String, Object>) movimento.get("resumo");
+                List<Map<String, Object>> categoriasMov = (List<Map<String, Object>>) movimento.get("categorias");
+                
+                if (detalhesMov == null) {
+                    continue;
+                }
+                
+                // Determina se é receita ou despesa
+                String natureza = (String) detalhesMov.getOrDefault("cNatureza", "");
+                boolean isDebito = "P".equals(natureza); // P = Contas a Pagar (despesa)
+                
+                // Extrai valores do resumo (prioriza valores do resumo)
+                Object valorObj = null;
+                if (resumoMov != null) {
+                    // Usa valor líquido do resumo (nValLiquido) ou valor em aberto (nValAberto)
+                    valorObj = resumoMov.get("nValLiquido");
+                    if (valorObj == null) {
+                        valorObj = resumoMov.get("nValAberto");
                     }
-                    
-                    // Calcula totais de receitas (contas a receber) - itera pelas páginas
-                    int paginaReceber = 1;
-                    int registrosPorPaginaReceber = 500; // Limite máximo do OMIE
-                    boolean temMaisReceber = true;
-                    
-                    while (temMaisReceber) {
-                        Map<String, Object> contasReceberPage = listarContasReceber(dataInicio, dataFim, paginaReceber, registrosPorPaginaReceber);
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> registrosReceberPage = (List<Map<String, Object>>) contasReceberPage.get("registros");
-                        
-                        if (registrosReceberPage != null && !registrosReceberPage.isEmpty()) {
-                            for (Map<String, Object> registro : registrosReceberPage) {
-                                Object valorObj = registro.get("nValorTitulo") != null ? registro.get("nValorTitulo") : 
-                                                 registro.get("valor_documento") != null ? registro.get("valor_documento") :
-                                                 registro.get("valor_pago");
-                                if (valorObj != null) {
-                                    double valor = valorObj instanceof Number ? 
-                                            ((Number) valorObj).doubleValue() : 
-                                            Double.parseDouble(valorObj.toString());
-                                    totalReceitas += valor;
-                                }
-                            }
-                            // Verifica se há mais páginas
-                            int totalRegistrosReceber = (Integer) contasReceberPage.getOrDefault("total_de_registros", 0);
-                            temMaisReceber = (paginaReceber * registrosPorPaginaReceber) < totalRegistrosReceber;
-                            paginaReceber++;
-                        } else {
-                            temMaisReceber = false;
-                        }
-                    }
-                    
-                    // Armazena no cache
-                    double saldoLiquido = totalReceitas - totalDespesas;
-                    cacheTotais.put(cacheKey, new TotaisCache(totalReceitas, totalDespesas, saldoLiquido));
-                    
-                    log.info("Totais calculados e armazenados no cache ({} páginas de despesas, {} páginas de receitas): Receitas={}, Despesas={}", 
-                            paginaPagar - 1, paginaReceber - 1, totalReceitas, totalDespesas);
-                } catch (Exception e) {
-                    log.warn("Erro ao calcular totais completos, usando apenas da página atual: {}", e.getMessage());
-                    // Fallback: calcula apenas da página atual
-                    for (Map<String, Object> mov : todasMovimentacoes) {
-                        Object valorObj = mov.get("nValorTitulo") != null ? mov.get("nValorTitulo") : 
-                                         mov.get("valor_documento") != null ? mov.get("valor_documento") :
-                                         mov.get("valor_pago");
-                        if (valorObj != null) {
-                            double valor = valorObj instanceof Number ? 
-                                    ((Number) valorObj).doubleValue() : 
-                                    Double.parseDouble(valorObj.toString());
-                            Boolean debito = (Boolean) mov.get("debito");
-                            if (Boolean.TRUE.equals(debito)) {
-                                totalDespesas += valor;
-                            } else {
-                                totalReceitas += valor;
-                            }
-                        }
+                    if (valorObj == null) {
+                        valorObj = resumoMov.get("nValPago");
                     }
                 }
+                
+                // Fallback para valor do título se resumo não tiver
+                if (valorObj == null) {
+                    valorObj = detalhesMov.get("nValorTitulo");
+                }
+                
+                double valor = 0.0;
+                if (valorObj != null) {
+                    valor = valorObj instanceof Number ? 
+                            ((Number) valorObj).doubleValue() : 
+                            Double.parseDouble(valorObj.toString());
+                }
+                
+                // Acumula totais
+                if (isDebito) {
+                    totalDespesas += valor;
+                } else {
+                    totalReceitas += valor;
+                }
+                
+                // Extrai categoria (primeira categoria encontrada)
+                String categoriaMov = "Sem categoria";
+                if (categoriasMov != null && !categoriasMov.isEmpty()) {
+                    Map<String, Object> primeiraCategoria = categoriasMov.get(0);
+                    Object codCateg = primeiraCategoria.get("cCodCateg");
+                    if (codCateg != null) {
+                        categoriaMov = codCateg.toString();
+                    }
+                } else if (detalhesMov.get("cCodCateg") != null) {
+                    categoriaMov = detalhesMov.get("cCodCateg").toString();
+                }
+                
+                // Constrói movimentação normalizada
+                Map<String, Object> movNormalizada = new HashMap<>();
+                movNormalizada.put("codigo_lancamento_omie", detalhesMov.get("nCodTitulo"));
+                movNormalizada.put("codigo_lancamento_integracao", detalhesMov.get("cCodIntTitulo"));
+                movNormalizada.put("numero_documento", detalhesMov.get("cNumTitulo"));
+                movNormalizada.put("data_emissao", detalhesMov.get("dDtEmissao"));
+                movNormalizada.put("data_vencimento", detalhesMov.get("dDtVenc"));
+                movNormalizada.put("data_previsao", detalhesMov.get("dDtPrevisao"));
+                movNormalizada.put("data_pagamento", detalhesMov.get("dDtPagamento"));
+                movNormalizada.put("data_registro", detalhesMov.get("dDtIncDe")); // Data de inclusão
+                movNormalizada.put("codigo_cliente_fornecedor", detalhesMov.get("nCodCliente"));
+                movNormalizada.put("cpf_cnpj_cliente", detalhesMov.get("cCPFCNPJCliente"));
+                movNormalizada.put("numero_pedido", detalhesMov.get("cNumOS"));
+                movNormalizada.put("status_titulo", detalhesMov.get("cStatus"));
+                movNormalizada.put("tipo_documento", detalhesMov.get("cTipo"));
+                movNormalizada.put("operacao", detalhesMov.get("cOperacao"));
+                movNormalizada.put("numero_documento_fiscal", detalhesMov.get("cNumDocFiscal"));
+                movNormalizada.put("codigo_barras", detalhesMov.get("cCodigoBarras"));
+                movNormalizada.put("codigo_vendedor", detalhesMov.get("nCodVendedor"));
+                movNormalizada.put("categoria", categoriaMov);
+                movNormalizada.put("codigo_categoria", categoriaMov);
+                movNormalizada.put("valor_documento", valorObj != null ? valorObj : detalhesMov.get("nValorTitulo"));
+                movNormalizada.put("tipo", isDebito ? "DESPESA" : "RECEITA");
+                movNormalizada.put("debito", isDebito);
+                movNormalizada.put("natureza", natureza);
+                
+                // Adiciona informações do resumo
+                if (resumoMov != null) {
+                    movNormalizada.put("valor_pago", resumoMov.get("nValPago"));
+                    movNormalizada.put("valor_aberto", resumoMov.get("nValAberto"));
+                    movNormalizada.put("valor_desconto", resumoMov.get("nDesconto"));
+                    movNormalizada.put("valor_juros", resumoMov.get("nJuros"));
+                    movNormalizada.put("valor_multa", resumoMov.get("nMulta"));
+                    movNormalizada.put("valor_liquido", resumoMov.get("nValLiquido"));
+                    movNormalizada.put("liquidado", resumoMov.get("cLiquidado"));
+                }
+                
+                // Adiciona categorias completas
+                movNormalizada.put("categorias", categoriasMov);
+                
+                // Adiciona departamentos se houver
+                movNormalizada.put("departamentos", movimento.get("departamentos"));
+                
+                // Preserva dados originais completos
+                movNormalizada.put("_detalhes", detalhesMov);
+                movNormalizada.put("_resumo", resumoMov);
+                movNormalizada.put("_movimento_completo", movimento);
+                
+                movimentacoesNormalizadas.add(movNormalizada);
             }
-
-            // Ajusta totais se há filtros aplicados
-            // Nota: Para filtros, os totais financeiros devem considerar apenas as movimentações filtradas
-            // Por limitação da API do OMIE, filtramos apenas a página atual
-            // Para totais precisos com filtros, seria necessário buscar todas as páginas
-            double totalReceitasFiltrado = totalReceitas;
-            double totalDespesasFiltrado = totalDespesas;
+            
+            // Enriquece movimentações com nomes de clientes/fornecedores
+            enriquecerComNomesClientes(movimentacoesNormalizadas);
+            
+            // Enriquece movimentações com nomes de formas de pagamento
+            enriquecerComNomesFormasPagamento(movimentacoesNormalizadas);
+            
+            // Aplica filtros no backend (data, natureza, categoria, texto de pesquisa)
+            List<Map<String, Object>> movimentacoesFiltradas = movimentacoesNormalizadas;
+            
+            // Filtro por data (início e fim)
+            if ((dataInicio != null && !dataInicio.isEmpty()) || (dataFim != null && !dataFim.isEmpty())) {
+                try {
+                    String dataInicioStr = null;
+                    String dataFimStr = null;
+                    
+                    if (dataInicio != null && !dataInicio.isEmpty()) {
+                        String[] partes = dataInicio.split("-");
+                        if (partes.length == 3) {
+                            dataInicioStr = partes[2] + "/" + partes[1] + "/" + partes[0];
+                        }
+                    }
+                    
+                    if (dataFim != null && !dataFim.isEmpty()) {
+                        String[] partes = dataFim.split("-");
+                        if (partes.length == 3) {
+                            dataFimStr = partes[2] + "/" + partes[1] + "/" + partes[0];
+                        }
+                    }
+                    
+                    final String dataInicioFinal = dataInicioStr;
+                    final String dataFimFinal = dataFimStr;
+                    
+                    movimentacoesFiltradas = movimentacoesFiltradas.stream()
+                            .filter(mov -> {
+                                String dataVenc = getStringValue(mov, "data_vencimento");
+                                if (dataVenc == null || dataVenc.isEmpty()) {
+                                    return true; // Mantém se não tiver data
+                                }
+                                
+                                // Compara datas no formato DD/MM/YYYY
+                                boolean dentroRange = true;
+                                if (dataInicioFinal != null) {
+                                    dentroRange = dataVenc.compareTo(dataInicioFinal) >= 0;
+                                }
+                                if (dentroRange && dataFimFinal != null) {
+                                    dentroRange = dataVenc.compareTo(dataFimFinal) <= 0;
+                                }
+                                return dentroRange;
+                            })
+                            .collect(Collectors.toList());
+                    
+                    log.info("Filtro de data aplicado: {} de {} movimentações", 
+                            movimentacoesFiltradas.size(), movimentacoesNormalizadas.size());
+                } catch (Exception e) {
+                    log.warn("Erro ao aplicar filtro de data: {}", e.getMessage());
+                }
+            }
+            
+            // Filtro por natureza (tipo: receita/despesa)
+            if (tipo != null && !tipo.isEmpty()) {
+                final boolean isDespesa = "despesa".equalsIgnoreCase(tipo);
+                movimentacoesFiltradas = movimentacoesFiltradas.stream()
+                        .filter(mov -> {
+                            Boolean debito = (Boolean) mov.get("debito");
+                            String natureza = getStringValue(mov, "natureza");
+                            return (isDespesa && (Boolean.TRUE.equals(debito) || "P".equals(natureza))) ||
+                                   (!isDespesa && (!Boolean.TRUE.equals(debito) && !"P".equals(natureza)));
+                        })
+                        .collect(Collectors.toList());
+                
+                log.info("Filtro de tipo aplicado: {} de {} movimentações", 
+                        movimentacoesFiltradas.size(), movimentacoesNormalizadas.size());
+            }
+            
+            // Filtro por categoria
+            if (categoria != null && !categoria.isEmpty()) {
+                final String categoriaFiltro = categoria;
+                movimentacoesFiltradas = movimentacoesFiltradas.stream()
+                        .filter(mov -> {
+                            String categoriaMov = getStringValue(mov, "categoria", "codigo_categoria");
+                            return categoriaMov != null && categoriaMov.equalsIgnoreCase(categoriaFiltro);
+                        })
+                        .collect(Collectors.toList());
+                
+                log.info("Filtro de categoria aplicado: {} de {} movimentações", 
+                        movimentacoesFiltradas.size(), movimentacoesNormalizadas.size());
+            }
+            
+            // Filtro por texto de pesquisa
+            if (textoPesquisa != null && !textoPesquisa.trim().isEmpty()) {
+                String texto = textoPesquisa.toLowerCase();
+                movimentacoesFiltradas = movimentacoesFiltradas.stream()
+                        .filter(mov -> {
+                            String numeroDoc = getStringValue(mov, "numero_documento");
+                            String numDocFiscal = getStringValue(mov, "numero_documento_fiscal");
+                            String codBarras = getStringValue(mov, "codigo_barras");
+                            String numPedido = getStringValue(mov, "numero_pedido");
+                            
+                            return (numeroDoc != null && numeroDoc.toLowerCase().contains(texto)) ||
+                                   (numDocFiscal != null && numDocFiscal.toLowerCase().contains(texto)) ||
+                                   (codBarras != null && codBarras.toLowerCase().contains(texto)) ||
+                                   (numPedido != null && numPedido.toLowerCase().contains(texto));
+                        })
+                        .collect(Collectors.toList());
+                
+                log.info("Filtro de texto aplicado: {} de {} movimentações", 
+                        movimentacoesFiltradas.size(), movimentacoesNormalizadas.size());
+            }
+            
+            // Calcula totais finais (ajustados se há filtros aplicados)
+            // Se filtros foram aplicados, recalcula totais apenas das movimentações filtradas
+            boolean temFiltros = (dataInicio != null && !dataInicio.isEmpty()) || 
+                                (dataFim != null && !dataFim.isEmpty()) ||
+                                (tipo != null && !tipo.isEmpty()) ||
+                                (categoria != null && !categoria.isEmpty()) ||
+                                (textoPesquisa != null && !textoPesquisa.trim().isEmpty());
             
             if (temFiltros) {
-                // Recalcula totais apenas das movimentações filtradas da página atual
-                totalReceitasFiltrado = 0.0;
-                totalDespesasFiltrado = 0.0;
+                // Recalcula totais apenas das movimentações filtradas
+                totalReceitas = 0.0;
+                totalDespesas = 0.0;
                 for (Map<String, Object> mov : movimentacoesFiltradas) {
-                    Object valorObj = mov.get("nValorTitulo") != null ? mov.get("nValorTitulo") : 
-                                     mov.get("valor_documento") != null ? mov.get("valor_documento") :
-                                     mov.get("valor_pago");
+                    Object valorObj = mov.get("valor_documento");
                     if (valorObj != null) {
                         double valor = valorObj instanceof Number ? 
                                 ((Number) valorObj).doubleValue() : 
                                 Double.parseDouble(valorObj.toString());
                         Boolean debito = (Boolean) mov.get("debito");
                         if (Boolean.TRUE.equals(debito)) {
-                            totalDespesasFiltrado += valor;
+                            totalDespesas += valor;
                         } else {
-                            totalReceitasFiltrado += valor;
+                            totalReceitas += valor;
                         }
                     }
                 }
-                log.info("Totais recalculados com filtros aplicados: Receitas={}, Despesas={} (apenas da página atual)",
-                        totalReceitasFiltrado, totalDespesasFiltrado);
             }
 
+            // Verifica se os nomes estão presentes nas movimentações filtradas
+            int movimentacoesComNome = 0;
+            for (Map<String, Object> mov : movimentacoesFiltradas) {
+                if (mov.get("nome_cliente_fornecedor") != null) {
+                    movimentacoesComNome++;
+                }
+            }
+            log.info("Movimentações com nome de cliente/fornecedor: {} de {}", movimentacoesComNome, movimentacoesFiltradas.size());
+            
+            // Constrói resultado final
             Map<String, Object> resultado = new HashMap<>();
-            // Frontend espera 'movimentacoes' e 'total' (conforme interface MovimentacoesOmieResponse)
             resultado.put("movimentacoes", movimentacoesFiltradas);
-            // Se há filtros, o total reflete apenas as movimentações filtradas da página atual
-            // Para total preciso, seria necessário buscar todas as páginas e filtrar
-            int totalFiltrado = temFiltros ? movimentacoesFiltradas.size() : totalGeral;
-            resultado.put("total", totalFiltrado);
-            // Totais financeiros (ajustados se há filtros)
-            resultado.put("totalReceitas", totalReceitasFiltrado);
-            resultado.put("totalDespesas", totalDespesasFiltrado);
-            resultado.put("saldoLiquido", totalReceitasFiltrado - totalDespesasFiltrado);
-            // Campos adicionais para compatibilidade
-            resultado.put("total_contas_pagar", totalPagar);
-            resultado.put("total_contas_receber", totalReceber);
+            resultado.put("total", nTotRegistros);
+            resultado.put("totalReceitas", totalReceitas);
+            resultado.put("totalDespesas", totalDespesas);
+            resultado.put("saldoLiquido", totalReceitas - totalDespesas);
+            resultado.put("pagina", nPagina);
+            resultado.put("totalPaginas", nTotPaginas);
+            resultado.put("registrosPorPagina", registrosPorPagina);
             resultado.put("dataInicio", dataInicio);
             resultado.put("dataFim", dataFim);
             
-            log.info("Movimentações combinadas: {} total ({} pagar + {} receber), Receitas: {}, Despesas: {}", 
-                    totalGeral, totalPagar, totalReceber, totalReceitas, totalDespesas);
+            log.info("Movimentações retornadas (MF): {} registros (total: {}), Receitas: {}, Despesas: {}, Saldo: {}", 
+                    movimentacoesFiltradas.size(), nTotRegistros, totalReceitas, totalDespesas, totalReceitas - totalDespesas);
             
             return resultado;
         } catch (Exception e) {
@@ -870,6 +983,299 @@ public class OmieService {
         }
         
         return null;
+    }
+    
+    /**
+     * Enriquece movimentações com nomes de clientes/fornecedores
+     * Busca os nomes usando a API do Omie quando o código do cliente está disponível
+     */
+    @SuppressWarnings("unchecked")
+    private void enriquecerComNomesClientes(List<Map<String, Object>> movimentacoes) {
+        if (movimentacoes == null || movimentacoes.isEmpty()) {
+            return;
+        }
+        
+        // Coleta códigos únicos de clientes/fornecedores
+        Set<Object> codigosClientes = new HashSet<>();
+        for (Map<String, Object> mov : movimentacoes) {
+            Object codigoCliente = mov.get("codigo_cliente_fornecedor");
+            if (codigoCliente != null && !codigoCliente.toString().isEmpty()) {
+                codigosClientes.add(codigoCliente);
+            }
+        }
+        
+        if (codigosClientes.isEmpty()) {
+            return;
+        }
+        
+        // Cria mapa de código -> nome e razão social
+        Map<String, String> mapaNomes = new HashMap<>();
+        Map<String, String> mapaRazoesSociais = new HashMap<>();
+        
+        // Busca nomes e razões sociais dos clientes/fornecedores
+        for (Object codigoObj : codigosClientes) {
+            try {
+                String codigoStr = codigoObj.toString();
+                Map<String, String> dadosCliente = buscarDadosClientePorCodigo(codigoStr);
+                if (dadosCliente != null) {
+                    String nome = dadosCliente.get("nome");
+                    String razaoSocial = dadosCliente.get("razao_social");
+                    if (nome != null && !nome.isEmpty()) {
+                        mapaNomes.put(codigoStr, nome);
+                    }
+                    if (razaoSocial != null && !razaoSocial.isEmpty()) {
+                        mapaRazoesSociais.put(codigoStr, razaoSocial);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Erro ao buscar dados do cliente {}: {}", codigoObj, e.getMessage());
+            }
+        }
+        
+        // Enriquece movimentações com os nomes e razões sociais encontrados
+        int enriquecidas = 0;
+        for (Map<String, Object> mov : movimentacoes) {
+            Object codigoCliente = mov.get("codigo_cliente_fornecedor");
+            if (codigoCliente != null) {
+                String codigoStr = codigoCliente.toString();
+                String nome = mapaNomes.get(codigoStr);
+                String razaoSocial = mapaRazoesSociais.get(codigoStr);
+                
+                if (nome != null && !nome.isEmpty()) {
+                    mov.put("nome_cliente_fornecedor", nome);
+                    enriquecidas++;
+                    log.debug("Movimentação enriquecida: código={}, nome={}", codigoStr, nome);
+                } else {
+                    log.debug("Nome não encontrado para código de cliente: {}", codigoStr);
+                }
+                
+                if (razaoSocial != null && !razaoSocial.isEmpty()) {
+                    mov.put("razao_social_cliente_fornecedor", razaoSocial);
+                    log.debug("Razão social adicionada: código={}, razão_social={}", codigoStr, razaoSocial);
+                }
+            } else {
+                log.debug("Movimentação sem código de cliente/fornecedor");
+            }
+        }
+        
+        log.info("Enriquecidas {} de {} movimentações com nomes de clientes/fornecedores ({} nomes encontrados)", 
+                enriquecidas, movimentacoes.size(), mapaNomes.size());
+    }
+    
+    /**
+     * Enriquece movimentações com nomes de formas de pagamento
+     * Busca os nomes usando a API do Omie quando o código do tipo de documento está disponível
+     */
+    @SuppressWarnings("unchecked")
+    private void enriquecerComNomesFormasPagamento(List<Map<String, Object>> movimentacoes) {
+        if (movimentacoes == null || movimentacoes.isEmpty()) {
+            return;
+        }
+        
+        // Coleta códigos únicos de tipos de documento
+        Set<Object> codigosTipoDoc = new HashSet<>();
+        for (Map<String, Object> mov : movimentacoes) {
+            Object codigoTipoDoc = mov.get("tipo_documento");
+            if (codigoTipoDoc != null && !codigoTipoDoc.toString().isEmpty()) {
+                codigosTipoDoc.add(codigoTipoDoc);
+            }
+        }
+        
+        if (codigosTipoDoc.isEmpty()) {
+            return;
+        }
+        
+        // Cria mapa de código -> nome
+        Map<String, String> mapaNomes = new HashMap<>();
+        
+        // Busca nomes dos tipos de documento
+        for (Object codigoObj : codigosTipoDoc) {
+            try {
+                String codigoStr = codigoObj.toString();
+                String nome = buscarNomeTipoDocumentoPorCodigo(codigoStr);
+                if (nome != null && !nome.isEmpty()) {
+                    mapaNomes.put(codigoStr, nome);
+                }
+            } catch (Exception e) {
+                log.warn("Erro ao buscar nome do tipo de documento {}: {}", codigoObj, e.getMessage());
+            }
+        }
+        
+        // Enriquece movimentações com os nomes encontrados
+        int enriquecidas = 0;
+        for (Map<String, Object> mov : movimentacoes) {
+            Object codigoTipoDoc = mov.get("tipo_documento");
+            if (codigoTipoDoc != null) {
+                String codigoStr = codigoTipoDoc.toString();
+                String nome = mapaNomes.get(codigoStr);
+                if (nome != null && !nome.isEmpty()) {
+                    mov.put("nome_forma_pagamento", nome);
+                    enriquecidas++;
+                    log.debug("Movimentação enriquecida com forma de pagamento: código={}, nome={}", codigoStr, nome);
+                } else {
+                    // Se não encontrou, usa um nome padrão baseado no código comum
+                    if ("99999".equals(codigoStr)) {
+                        mov.put("nome_forma_pagamento", "Outros");
+                    }
+                }
+            }
+        }
+        
+        log.info("Enriquecidas {} de {} movimentações com nomes de formas de pagamento ({} nomes encontrados)", 
+                enriquecidas, movimentacoes.size(), mapaNomes.size());
+    }
+    
+    /**
+     * Busca nome do tipo de documento/forma de pagamento pelo código usando a API do Omie
+     * Documentação: https://app.omie.com.br/api/v1/geral/tiposdocumento/
+     * Método: ConsultarTipoDocumento
+     */
+    @SuppressWarnings("unchecked")
+    private String buscarNomeTipoDocumentoPorCodigo(String codigoTipoDoc) {
+        if (mockEnabled || codigoTipoDoc == null || codigoTipoDoc.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            Map<String, Object> params = new HashMap<>();
+            // Omie espera codigo_tipo_documento como parâmetro
+            params.put("codigo_tipo_documento", codigoTipoDoc);
+            
+            Map<String, Object> response = executarChamadaApi("/geral/tiposdocumento/", "ConsultarTipoDocumento", params);
+            
+            log.debug("Resposta ConsultarTipoDocumento para código {}: {}", codigoTipoDoc, response);
+            
+            // Omie retorna o tipo de documento em tipo_documento_cadastro
+            Object tipoDocObj = response.get("tipo_documento_cadastro");
+            if (tipoDocObj == null) {
+                tipoDocObj = response.get("tipo_documento");
+            }
+            
+            if (tipoDocObj instanceof Map) {
+                Map<String, Object> tipoDoc = (Map<String, Object>) tipoDocObj;
+                log.debug("Dados do tipo de documento {}: {}", codigoTipoDoc, tipoDoc);
+                
+                // Busca o nome do tipo de documento
+                Object nome = tipoDoc.get("nome");
+                if (nome != null && !nome.toString().isEmpty()) {
+                    log.debug("Nome encontrado para tipo de documento {}: {}", codigoTipoDoc, nome);
+                    return nome.toString();
+                }
+                
+                Object descricao = tipoDoc.get("descricao");
+                if (descricao != null && !descricao.toString().isEmpty()) {
+                    log.debug("Descrição encontrada para tipo de documento {}: {}", codigoTipoDoc, descricao);
+                    return descricao.toString();
+                }
+            }
+            
+            log.warn("Nome não encontrado para tipo de documento {} na resposta: {}", codigoTipoDoc, response);
+            return null;
+        } catch (Exception e) {
+            // Log apenas em debug para não poluir logs quando tipo não for encontrado
+            log.debug("Erro ao buscar tipo de documento {}: {}", codigoTipoDoc, e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Busca dados do cliente/fornecedor pelo código usando a API do Omie
+     * Retorna um mapa com "nome" e "razao_social"
+     * Documentação: https://app.omie.com.br/api/v1/geral/clientes/
+     * Método: ConsultarCliente
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, String> buscarDadosClientePorCodigo(String codigoCliente) {
+        if (mockEnabled || codigoCliente == null || codigoCliente.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            Map<String, Object> params = new HashMap<>();
+            // Omie espera codigo_cliente_omie como parâmetro
+            params.put("codigo_cliente_omie", codigoCliente);
+            
+            Map<String, Object> response = executarChamadaApi("/geral/clientes/", "ConsultarCliente", params);
+            
+            log.debug("Resposta ConsultarCliente para código {}: {}", codigoCliente, response);
+            
+            // Omie pode retornar o cliente em cliente_cadastro, cliente, ou diretamente no nível raiz
+            Map<String, Object> cliente = null;
+            Object clienteObj = response.get("cliente_cadastro");
+            if (clienteObj instanceof Map) {
+                cliente = (Map<String, Object>) clienteObj;
+                log.debug("Cliente encontrado em 'cliente_cadastro'");
+            } else {
+                clienteObj = response.get("cliente");
+                if (clienteObj instanceof Map) {
+                    cliente = (Map<String, Object>) clienteObj;
+                    log.debug("Cliente encontrado em 'cliente'");
+                } else {
+                    // Se não encontrou em cliente_cadastro ou cliente, verifica se os dados estão no nível raiz
+                    // A API do Omie pode retornar os dados diretamente no nível raiz
+                    if (response.containsKey("razao_social") || response.containsKey("nome_fantasia")) {
+                        cliente = response;
+                        log.debug("Cliente encontrado no nível raiz da resposta");
+                    }
+                }
+            }
+            
+            if (cliente != null) {
+                log.debug("Dados do cliente {} extraídos: razao_social={}, nome_fantasia={}", 
+                        codigoCliente, cliente.get("razao_social"), cliente.get("nome_fantasia"));
+                
+                Map<String, String> resultado = new HashMap<>();
+                
+                // Prioriza nome fantasia, depois razão social, depois nome
+                Object nomeFantasia = cliente.get("nome_fantasia");
+                Object razaoSocial = cliente.get("razao_social");
+                Object nome = cliente.get("nome");
+                
+                // Armazena razão social se disponível
+                if (razaoSocial != null && !razaoSocial.toString().trim().isEmpty()) {
+                    resultado.put("razao_social", razaoSocial.toString().trim());
+                    log.debug("Razão social encontrada para cliente {}: {}", codigoCliente, razaoSocial);
+                }
+                
+                // Determina o nome a retornar (prioriza fantasia)
+                if (nomeFantasia != null && !nomeFantasia.toString().trim().isEmpty()) {
+                    resultado.put("nome", nomeFantasia.toString().trim());
+                    log.debug("Nome encontrado (fantasia) para cliente {}: {}", codigoCliente, nomeFantasia);
+                } else if (razaoSocial != null && !razaoSocial.toString().trim().isEmpty()) {
+                    resultado.put("nome", razaoSocial.toString().trim());
+                    log.debug("Nome encontrado (razão social) para cliente {}: {}", codigoCliente, razaoSocial);
+                } else if (nome != null && !nome.toString().trim().isEmpty()) {
+                    resultado.put("nome", nome.toString().trim());
+                    log.debug("Nome encontrado (nome) para cliente {}: {}", codigoCliente, nome);
+                }
+                
+                if (!resultado.isEmpty()) {
+                    log.info("Dados do cliente {} retornados: nome={}, razao_social={}", 
+                            codigoCliente, resultado.get("nome"), resultado.get("razao_social"));
+                    return resultado;
+                } else {
+                    log.warn("Cliente {} encontrado mas sem nome ou razão social válidos", codigoCliente);
+                }
+            }
+            
+            log.warn("Dados não encontrados para cliente {} na resposta. Chaves disponíveis: {}", 
+                    codigoCliente, response.keySet());
+            return null;
+        } catch (Exception e) {
+            // Log apenas em debug para não poluir logs quando cliente não for encontrado
+            log.warn("Erro ao buscar cliente {}: {}", codigoCliente, e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Busca nome do cliente/fornecedor pelo código usando a API do Omie
+     * @deprecated Use buscarDadosClientePorCodigo() para obter nome e razão social
+     */
+    @Deprecated
+    private String buscarNomeClientePorCodigo(String codigoCliente) {
+        Map<String, String> dados = buscarDadosClientePorCodigo(codigoCliente);
+        return dados != null ? dados.get("nome") : null;
     }
     
     /**
