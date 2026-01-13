@@ -370,22 +370,22 @@ public class OmieService {
             // Filtros de data (formato DD/MM/YYYY conforme documentação Omie)
             if (dataInicio != null && !dataInicio.isEmpty()) {
                 try {
-                    // Converter de YYYY-MM-DD para DD/MM/YYYY
-                    String[] partes = dataInicio.split("-");
-                    if (partes.length == 3) {
-                        params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
-                    }
+                // Converter de YYYY-MM-DD para DD/MM/YYYY
+                String[] partes = dataInicio.split("-");
+                if (partes.length == 3) {
+                    params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                }
                 } catch (Exception e) {
                     log.warn("Erro ao converter dataInicio para formato Omie: {}", dataInicio, e);
-                }
+            }
             }
             
             if (dataFim != null && !dataFim.isEmpty()) {
                 try {
-                    // Converter de YYYY-MM-DD para DD/MM/YYYY
-                    String[] partes = dataFim.split("-");
-                    if (partes.length == 3) {
-                        params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                // Converter de YYYY-MM-DD para DD/MM/YYYY
+                String[] partes = dataFim.split("-");
+                if (partes.length == 3) {
+                    params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
                     }
                 } catch (Exception e) {
                     log.warn("Erro ao converter dataFim para formato Omie: {}", dataFim, e);
@@ -483,22 +483,22 @@ public class OmieService {
             // Filtros de data (formato DD/MM/YYYY conforme documentação Omie)
             if (dataInicio != null && !dataInicio.isEmpty()) {
                 try {
-                    // Converter de YYYY-MM-DD para DD/MM/YYYY
-                    String[] partes = dataInicio.split("-");
-                    if (partes.length == 3) {
-                        params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
-                    }
+                // Converter de YYYY-MM-DD para DD/MM/YYYY
+                String[] partes = dataInicio.split("-");
+                if (partes.length == 3) {
+                    params.put("filtrar_por_data_de", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                }
                 } catch (Exception e) {
                     log.warn("Erro ao converter dataInicio para formato Omie: {}", dataInicio, e);
-                }
+            }
             }
             
             if (dataFim != null && !dataFim.isEmpty()) {
                 try {
-                    // Converter de YYYY-MM-DD para DD/MM/YYYY
-                    String[] partes = dataFim.split("-");
-                    if (partes.length == 3) {
-                        params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
+                // Converter de YYYY-MM-DD para DD/MM/YYYY
+                String[] partes = dataFim.split("-");
+                if (partes.length == 3) {
+                    params.put("filtrar_por_data_ate", partes[2] + "/" + partes[1] + "/" + partes[0]);
                     }
                 } catch (Exception e) {
                     log.warn("Erro ao converter dataFim para formato Omie: {}", dataFim, e);
@@ -657,16 +657,21 @@ public class OmieService {
                     valorObj = detalhesMov.get("nValorTitulo");
                 }
                 
+                // Para movimentações de conta corrente, usa nValorMovCC
+                if (valorObj == null) {
+                    valorObj = detalhesMov.get("nValorMovCC");
+                }
+                
                 double valor = 0.0;
-                if (valorObj != null) {
+                                if (valorObj != null) {
                     valor = valorObj instanceof Number ? 
-                            ((Number) valorObj).doubleValue() : 
-                            Double.parseDouble(valorObj.toString());
+                                            ((Number) valorObj).doubleValue() : 
+                                            Double.parseDouble(valorObj.toString());
                 }
                 
                 // Acumula totais
                 if (isDebito) {
-                    totalDespesas += valor;
+                                    totalDespesas += valor;
                 } else {
                     totalReceitas += valor;
                 }
@@ -683,13 +688,27 @@ public class OmieService {
                     categoriaMov = detalhesMov.get("cCodCateg").toString();
                 }
                 
+                // Detecta tipo de movimentação (conta corrente vs título)
+                String grupo = (String) detalhesMov.getOrDefault("cGrupo", "");
+                boolean isContaCorrente = grupo.contains("CONTA_CORRENTE");
+                
+                // Para conta corrente, usa nCodMovCC como código; para títulos, usa nCodTitulo
+                Object codigoLancamento = isContaCorrente ? detalhesMov.get("nCodMovCC") : detalhesMov.get("nCodTitulo");
+                
+                // Para conta corrente, data de vencimento pode ser a data de pagamento ou null
+                Object dataVencimento = detalhesMov.get("dDtVenc");
+                if (dataVencimento == null && isContaCorrente) {
+                    // Para conta corrente sem data de vencimento, usa data de pagamento como referência
+                    dataVencimento = detalhesMov.get("dDtPagamento");
+                }
+                
                 // Constrói movimentação normalizada
                 Map<String, Object> movNormalizada = new HashMap<>();
-                movNormalizada.put("codigo_lancamento_omie", detalhesMov.get("nCodTitulo"));
+                movNormalizada.put("codigo_lancamento_omie", codigoLancamento != null ? codigoLancamento : 0);
                 movNormalizada.put("codigo_lancamento_integracao", detalhesMov.get("cCodIntTitulo"));
                 movNormalizada.put("numero_documento", detalhesMov.get("cNumTitulo"));
                 movNormalizada.put("data_emissao", detalhesMov.get("dDtEmissao"));
-                movNormalizada.put("data_vencimento", detalhesMov.get("dDtVenc"));
+                movNormalizada.put("data_vencimento", dataVencimento);
                 movNormalizada.put("data_previsao", detalhesMov.get("dDtPrevisao"));
                 movNormalizada.put("data_pagamento", detalhesMov.get("dDtPagamento"));
                 movNormalizada.put("data_registro", detalhesMov.get("dDtIncDe")); // Data de inclusão
@@ -704,7 +723,10 @@ public class OmieService {
                 movNormalizada.put("codigo_vendedor", detalhesMov.get("nCodVendedor"));
                 movNormalizada.put("categoria", categoriaMov);
                 movNormalizada.put("codigo_categoria", categoriaMov);
-                movNormalizada.put("valor_documento", valorObj != null ? valorObj : detalhesMov.get("nValorTitulo"));
+                // Usa o valor calculado (que já considera nValorMovCC para conta corrente)
+                movNormalizada.put("valor_documento", valor);
+                // Adiciona flag para identificar conta corrente
+                movNormalizada.put("is_conta_corrente", isContaCorrente);
                 movNormalizada.put("tipo", isDebito ? "DESPESA" : "RECEITA");
                 movNormalizada.put("debito", isDebito);
                 movNormalizada.put("natureza", natureza);
@@ -768,9 +790,20 @@ public class OmieService {
                     
                     movimentacoesFiltradas = movimentacoesFiltradas.stream()
                             .filter(mov -> {
+                                // Tenta data de vencimento primeiro, depois data de pagamento (para conta corrente)
                                 String dataVenc = getStringValue(mov, "data_vencimento");
                                 if (dataVenc == null || dataVenc.isEmpty()) {
-                                    return true; // Mantém se não tiver data
+                                    // Se não tem data de vencimento, tenta data de pagamento
+                                    dataVenc = getStringValue(mov, "data_pagamento");
+                                }
+                                if (dataVenc == null || dataVenc.isEmpty()) {
+                                    // Se não tem nenhuma, tenta data de emissão
+                                    dataVenc = getStringValue(mov, "data_emissao");
+                                }
+                                
+                                // Se ainda não tem data, mantém a movimentação (não filtra)
+                                if (dataVenc == null || dataVenc.isEmpty()) {
+                                    return true;
                                 }
                                 
                                 // Compara datas no formato DD/MM/YYYY
@@ -995,16 +1028,23 @@ public class OmieService {
             return;
         }
         
-        // Coleta códigos únicos de clientes/fornecedores
-        Set<Object> codigosClientes = new HashSet<>();
+        // Coleta códigos únicos de clientes/fornecedores (usando String para garantir consistência)
+        Set<String> codigosClientes = new HashSet<>();
         for (Map<String, Object> mov : movimentacoes) {
             Object codigoCliente = mov.get("codigo_cliente_fornecedor");
-            if (codigoCliente != null && !codigoCliente.toString().isEmpty()) {
-                codigosClientes.add(codigoCliente);
+            if (codigoCliente != null) {
+                String codigoStr = codigoCliente.toString().trim();
+                // Ignora apenas strings vazias ou "null", mas aceita "0" e números válidos
+                if (!codigoStr.isEmpty() && !codigoStr.equalsIgnoreCase("null")) {
+                    codigosClientes.add(codigoStr);
+                }
             }
         }
         
+        log.debug("Coletados {} códigos únicos de clientes/fornecedores para enriquecimento", codigosClientes.size());
+        
         if (codigosClientes.isEmpty()) {
+            log.debug("Nenhum código de cliente/fornecedor encontrado para enriquecer");
             return;
         }
         
@@ -1013,31 +1053,47 @@ public class OmieService {
         Map<String, String> mapaRazoesSociais = new HashMap<>();
         
         // Busca nomes e razões sociais dos clientes/fornecedores
-        for (Object codigoObj : codigosClientes) {
+        int clientesBuscados = 0;
+        int clientesEncontrados = 0;
+        for (String codigoStr : codigosClientes) {
             try {
-                String codigoStr = codigoObj.toString();
+                clientesBuscados++;
                 Map<String, String> dadosCliente = buscarDadosClientePorCodigo(codigoStr);
-                if (dadosCliente != null) {
+                if (dadosCliente != null && !dadosCliente.isEmpty()) {
+                    clientesEncontrados++;
                     String nome = dadosCliente.get("nome");
                     String razaoSocial = dadosCliente.get("razao_social");
                     if (nome != null && !nome.isEmpty()) {
                         mapaNomes.put(codigoStr, nome);
+                        log.debug("Nome encontrado para cliente {}: {}", codigoStr, nome);
                     }
                     if (razaoSocial != null && !razaoSocial.isEmpty()) {
                         mapaRazoesSociais.put(codigoStr, razaoSocial);
+                        log.debug("Razão social encontrada para cliente {}: {}", codigoStr, razaoSocial);
                     }
+                } else {
+                    log.debug("Dados do cliente {} não encontrados na API Omie", codigoStr);
                 }
             } catch (Exception e) {
-                log.warn("Erro ao buscar dados do cliente {}: {}", codigoObj, e.getMessage());
+                log.warn("Erro ao buscar dados do cliente {}: {}", codigoStr, e.getMessage());
             }
         }
         
+        log.info("Busca de clientes: {} buscados, {} encontrados, {} nomes, {} razões sociais no mapa", 
+                clientesBuscados, clientesEncontrados, mapaNomes.size(), mapaRazoesSociais.size());
+        
         // Enriquece movimentações com os nomes e razões sociais encontrados
         int enriquecidas = 0;
+        int razoesSociaisAdicionadas = 0;
         for (Map<String, Object> mov : movimentacoes) {
             Object codigoCliente = mov.get("codigo_cliente_fornecedor");
             if (codigoCliente != null) {
-                String codigoStr = codigoCliente.toString();
+                String codigoStr = codigoCliente.toString().trim();
+                // Ignora apenas strings vazias ou "null"
+                if (codigoStr.isEmpty() || codigoStr.equalsIgnoreCase("null")) {
+                    continue;
+                }
+                
                 String nome = mapaNomes.get(codigoStr);
                 String razaoSocial = mapaRazoesSociais.get(codigoStr);
                 
@@ -1046,20 +1102,20 @@ public class OmieService {
                     enriquecidas++;
                     log.debug("Movimentação enriquecida: código={}, nome={}", codigoStr, nome);
                 } else {
-                    log.debug("Nome não encontrado para código de cliente: {}", codigoStr);
+                    log.debug("Nome não encontrado no mapa para código: {} (mapa tem {} entradas)", 
+                            codigoStr, mapaNomes.size());
                 }
                 
                 if (razaoSocial != null && !razaoSocial.isEmpty()) {
                     mov.put("razao_social_cliente_fornecedor", razaoSocial);
+                    razoesSociaisAdicionadas++;
                     log.debug("Razão social adicionada: código={}, razão_social={}", codigoStr, razaoSocial);
                 }
-            } else {
-                log.debug("Movimentação sem código de cliente/fornecedor");
             }
         }
         
-        log.info("Enriquecidas {} de {} movimentações com nomes de clientes/fornecedores ({} nomes encontrados)", 
-                enriquecidas, movimentacoes.size(), mapaNomes.size());
+        log.info("Enriquecidas {} de {} movimentações com nomes de clientes/fornecedores ({} nomes, {} razões sociais)", 
+                enriquecidas, movimentacoes.size(), mapaNomes.size(), razoesSociaisAdicionadas);
     }
     
     /**
@@ -1088,10 +1144,19 @@ public class OmieService {
         // Cria mapa de código -> nome
         Map<String, String> mapaNomes = new HashMap<>();
         
-        // Busca nomes dos tipos de documento
+        // Adiciona mapeamento conhecido para código "99999" (Outros) sem chamar API
+        if (codigosTipoDoc.contains("99999")) {
+            mapaNomes.put("99999", "Outros");
+        }
+        
+        // Busca nomes dos tipos de documento (exceto 99999 que já foi mapeado)
         for (Object codigoObj : codigosTipoDoc) {
+            String codigoStr = codigoObj.toString();
+            // Pula código 99999 que já foi mapeado
+            if ("99999".equals(codigoStr)) {
+                continue;
+            }
             try {
-                String codigoStr = codigoObj.toString();
                 String nome = buscarNomeTipoDocumentoPorCodigo(codigoStr);
                 if (nome != null && !nome.isEmpty()) {
                     mapaNomes.put(codigoStr, nome);
@@ -1112,11 +1177,6 @@ public class OmieService {
                     mov.put("nome_forma_pagamento", nome);
                     enriquecidas++;
                     log.debug("Movimentação enriquecida com forma de pagamento: código={}, nome={}", codigoStr, nome);
-                } else {
-                    // Se não encontrou, usa um nome padrão baseado no código comum
-                    if ("99999".equals(codigoStr)) {
-                        mov.put("nome_forma_pagamento", "Outros");
-                    }
                 }
             }
         }
@@ -1127,8 +1187,8 @@ public class OmieService {
     
     /**
      * Busca nome do tipo de documento/forma de pagamento pelo código usando a API do Omie
-     * Documentação: https://app.omie.com.br/api/v1/geral/tiposdocumento/
-     * Método: ConsultarTipoDocumento
+     * Documentação: https://app.omie.com.br/api/v1/geral/tiposdoc/
+     * Método: PesquisarTipoDocumento
      */
     @SuppressWarnings("unchecked")
     private String buscarNomeTipoDocumentoPorCodigo(String codigoTipoDoc) {
@@ -1138,17 +1198,21 @@ public class OmieService {
         
         try {
             Map<String, Object> params = new HashMap<>();
-            // Omie espera codigo_tipo_documento como parâmetro
-            params.put("codigo_tipo_documento", codigoTipoDoc);
+            // Omie espera codigo como parâmetro para PesquisarTipoDocumento
+            params.put("codigo", codigoTipoDoc);
             
-            Map<String, Object> response = executarChamadaApi("/geral/tiposdocumento/", "ConsultarTipoDocumento", params);
+            Map<String, Object> response = executarChamadaApi("/geral/tiposdoc/", "PesquisarTipoDocumento", params);
             
-            log.debug("Resposta ConsultarTipoDocumento para código {}: {}", codigoTipoDoc, response);
+            log.debug("Resposta PesquisarTipoDocumento para código {}: {}", codigoTipoDoc, response);
             
-            // Omie retorna o tipo de documento em tipo_documento_cadastro
+            // Omie retorna o tipo de documento em tipo_documento_cadastro ou na raiz
             Object tipoDocObj = response.get("tipo_documento_cadastro");
             if (tipoDocObj == null) {
                 tipoDocObj = response.get("tipo_documento");
+            }
+            // Se ainda não encontrou, pode estar na raiz da resposta
+            if (tipoDocObj == null && response.containsKey("codigo")) {
+                tipoDocObj = response;
             }
             
             if (tipoDocObj instanceof Map) {
@@ -1210,13 +1274,21 @@ public class OmieService {
                 if (clienteObj instanceof Map) {
                     cliente = (Map<String, Object>) clienteObj;
                     log.debug("Cliente encontrado em 'cliente'");
-                } else {
-                    // Se não encontrou em cliente_cadastro ou cliente, verifica se os dados estão no nível raiz
-                    // A API do Omie pode retornar os dados diretamente no nível raiz
-                    if (response.containsKey("razao_social") || response.containsKey("nome_fantasia")) {
-                        cliente = response;
-                        log.debug("Cliente encontrado no nível raiz da resposta");
-                    }
+                }
+            }
+            
+            // Se não encontrou em cliente_cadastro ou cliente, verifica se os dados estão no nível raiz
+            // A API do Omie pode retornar os dados diretamente no nível raiz
+            if (cliente == null) {
+                // Verifica se há campos de cliente no nível raiz
+                boolean temRazaoSocial = response.containsKey("razao_social") && response.get("razao_social") != null;
+                boolean temNomeFantasia = response.containsKey("nome_fantasia") && response.get("nome_fantasia") != null;
+                boolean temCodigoCliente = response.containsKey("codigo_cliente_omie");
+                
+                if (temRazaoSocial || temNomeFantasia || temCodigoCliente) {
+                    cliente = response;
+                    log.debug("Cliente encontrado no nível raiz da resposta (razao_social={}, nome_fantasia={})", 
+                            temRazaoSocial, temNomeFantasia);
                 }
             }
             
